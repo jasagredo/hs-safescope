@@ -1,0 +1,4 @@
+packages: .
+
+extra-include-dirs: /home/javier/hs-safescope/examples/example
+                    /home/javier/ghc/rts

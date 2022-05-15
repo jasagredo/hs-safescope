@@ -1,0 +1,22 @@
+cabal-version:      2.4
+name:               example
+version:            0.1.0.0
+
+author:             Javier Sagredo
+maintainer:         jasataco@gmail.com
+
+extra-source-files: CHANGELOG.md
+
+executable example
+    main-is:          Main.hs
+
+    build-depends:    base,
+                      inline-c
+    hs-source-dirs:   app
+    default-language: Haskell2010
+    extra-libraries:  Cbar
+    ghc-options:      -threaded
+                      -eventlog
+                      -rtsopts
+                      -fno-prof-count-entries
+    extra-lib-dirs:   /home/javier/hs-safescope/examples/example

@@ -1,0 +1,6 @@
+packages: .
+
+source-repository-package
+    type: git
+    location: https://github.com/mpickering/hs-speedscope
+    tag: 5a77aeb163e07dc63769d4e0a659e5821cdee527
