@@ -1,5 +1,7 @@
 # `hs-safescope`
 
+> :warning: This project is still a mere prototype!!
+
 `hs-safescope` is a tool that extends the approach taken by
 [`hs-speedscope`](https://github.com/mpickering/hs-speedscope) and
 [`ghc-events-analyze`](https://github.com/well-typed/ghc-events-analyze) to add
@@ -64,7 +66,7 @@ knowledgeable in TH.
 ### A brief look at the runtime system
 
 GHC's runtime system creates _Haskell threads_ (green threads) which are
-lightweight virtual threads that the scheduler will wake up and interrupt. A
+lightweight virtual threads that the scheduler will wake up and deschedule. A
 Haskell program running on one OS thread can have multiple Haskell threads being
 executed on that same OS thread at different intervals.
 
@@ -90,9 +92,9 @@ finishes and if the eventlog tracing is enabled (using `-eventlog` when linking
 and `-l` when running) then `ProfSampleCostCentre` events are emitted to the
 eventlog.
 
-The total running time reported at the end of the run is calculated by roughly the
-[following
-formula](https://gitlab.haskell.org/ghc/ghc/-/blob/master/rts/ProfilerReport.c#L297-L302):
+The total running time reported at the end of the run is calculated by roughly
+the [following
+formula](https://gitlab.haskell.org/ghc/ghc/-/blob/16b9100c9ef6b34b88a52b3b9e663dd40abd028f/rts/ProfilerReport.c#L297-302):
 
 ```
 total_ticks * tick_interval / num_capabilities
@@ -168,18 +170,18 @@ incrementally what each event that we add will provide.
 
 First we surround the events with `START` and `STOP` events exactly as done in
 `ghc-events-analyze`. To also be able to differentiate different calls to the
-same function, we spawn a global `MVar` that acts as a counter.
+same function, we spawn a global `IORef` that acts as a counter.
 
 ``` haskell
 foreign import ccall safe "bar_c" bar_c :: IO ()
 
 {-# NOINLINE bar_cnt #-}
-bar_cnt :: MVar Int
-bar_cnt = unsafePerformIO $ newMVar 0
+bar_cnt :: IORef Int
+bar_cnt = unsafePerformIO $ newIORef 0
 
 bar :: IO ()
 bar = do
-  c <- modifyMVar bar_cnt (\c -> (c + 1, c))
+  c <- atomicModifyIORef' bar_cnt (\c -> (c + 1, c))
   traceEventIO $ "START " <> c <> " bar"
   bar_c
   traceEventIO $ "END " <> c <> " bar"
@@ -198,12 +200,12 @@ this, we can create a new event that will explicitly carry the cost-centre stack
 foreign import ccall safe "bar_c" bar_c :: IO ()
 
 {-# NOINLINE bar_cnt #-}
-bar_cnt :: MVar Int
-bar_cnt = unsafePerformIO $ newMVar 0
+bar_cnt :: IORef Int
+bar_cnt = unsafePerformIO $ newIORef 0
 
 bar :: IO ()
 bar = do
-  c <- modifyMVar bar_cnt (\c -> (c + 1, c))
+  c <- atomicModifyIORef' bar_cnt (\c -> (c + 1, c))
   traceEventIO $ "START " <> c <> " bar"
 + traceEventIO . (<>) ("ANN_CCS " <> c <> " bar ") . show =<< ccsToStrings =<< getCurrentCCS undefined
   bar_c
@@ -248,13 +250,13 @@ it in a much more comfortable way later on):
 
 
 {-# NOINLINE bar_cnt #-}
--bar_cnt :: MVar Int
-+bar_cnt :: MVar C.CInt
-bar_cnt = unsafePerformIO $ newMVar 0
+-bar_cnt :: IORef Int
++bar_cnt :: IORef C.CInt
+bar_cnt = unsafePerformIO $ newIORef 0
 
 bar :: IO ()
 bar = do
-  c <- modifyMVar bar_cnt (\c -> (c + 1, c))
+  c <- atomicModifyIORef' bar_cnt (\c -> (c + 1, c))
   traceEventIO $ "START " <> c <> " bar"
   traceEventIO . (<>) ("ANN_CCS " <> c <> " bar ") . show =<< ccsToStrings =<< getCurrentCCS undefined
 - bar_c
@@ -315,12 +317,12 @@ a header that describes the foreign functions we want to use, in this case
 +C.include "<mylib>.h"
 
 {-# NOINLINE bar_cnt #-}
-bar_cnt :: MVar C.CInt
-bar_cnt = unsafePerformIO $ newMVar 0
+bar_cnt :: IORef C.CInt
+bar_cnt = unsafePerformIO $ newIORef 0
 
 bar :: IO ()
 bar = do
-  c <- modifyMVar bar_cnt (\c -> (c + 1, c))
+  c <- atomicModifyIORef' bar_cnt (\c -> (c + 1, c))
   traceEventIO $ "START " <> c <> " bar"
   traceEventIO . (<>) ("ANN_CCS " <> c <> " bar ") . show =<< ccsToStrings =<< getCurrentCCS undefined
 - bar_c
@@ -481,7 +483,7 @@ We then have the Haskell code as follows:
 
 module Main where
 
-import           Control.Concurrent ( newMVar, MVar, modifyMVar)
+import           Data.IORef
 import           Debug.Trace ( traceEventIO )
 import qualified Foreign.C as C (CInt(..))
 import           GHC.Stack ( ccsToStrings, getCurrentCCS )
@@ -497,12 +499,12 @@ C.include "Capability.h"
 C.include "bar.h"
 
 {-# NOINLINE bar_cnt #-}
-bar_cnt :: MVar C.CInt
-bar_cnt = unsafePerformIO $ newMVar 0
+bar_cnt :: IORef C.CInt
+bar_cnt = unsafePerformIO $ newIORef 0
 
 bar :: C.CInt -> IO ()
 bar a1 = do
-  c <- modifyMVar bar_cnt (\c -> return (c + 1, c))
+  c <- atomicModifyIORef' bar_cnt (\c -> return (c + 1, c))
   traceEventIO $ "START " <> show c <> " bar"
   traceEventIO . (<>) ("ANN_SCC " <> show c <> " bar ") . show =<< ccsToStrings =<< getCurrentCCS undefined
   [C.block| void {
@@ -730,4 +732,8 @@ We see now that capability 1 runs a call to `fib` at the end, which belongs to t
 
 ![](.github/images/sft1.png)
 
-Here we a call to `bar` that runs for 2 seconds and then no longer runs in the foreign code as it returns to Haskell and combining it with the previous graph, we see that it then calls `fib`.
+Here we see a call to `bar` that runs for 2 seconds and then switches back to a Haskell capability. Combining it with the previous graph, we see that it then continues with `fib 34`.
+
+# Acknowledgements
+
+Thanks to the authors of `hs-speedscope` and `ghc-events-analyze` which vastly influenced this executable.
